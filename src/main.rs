@@ -3,8 +3,12 @@ use eframe::{
     epi,
 };
 use reqwest;
+use reqwest::StatusCode;
 use reqwest::Url;
-
+use std::io::Read;
+use std::sync::mpsc::channel;
+use std::sync::Arc;
+use std::thread;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum HTTPMethod {
     Put,
@@ -16,6 +20,13 @@ impl Default for HTTPMethod {
     fn default() -> HTTPMethod {
         HTTPMethod::Get
     }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub struct Response {
+    body: Option<String>,
+    status: Option<StatusCode>,
+    headers: Option<reqwest::header::HeaderMap>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -42,8 +53,9 @@ impl Default for Request {
 #[derive(Debug, Clone, Default)]
 pub struct UI {
     response: String,
-    headers: Option<reqwest::header::HeaderMap>,
     request: Request,
+    req_tx: Option<std::sync::mpsc::Sender<Request>>,
+    res_rx: Option<Arc<std::sync::mpsc::Receiver<Response>>>,
 }
 
 impl epi::App for UI {
@@ -97,15 +109,37 @@ impl epi::App for UI {
                         }
                     }
                 }
-                ui.button("Go");
+                let a = ui.button("Go");
+                if a.clicked() {
+                    dbg!(self.req_tx.as_ref().unwrap().send(self.request.clone()));
+                }
             });
             ui.separator();
+            ui.horizontal(|ui| {});
         });
     }
 }
 
 fn main() {
-    let app = UI::default();
     let native_options = eframe::NativeOptions::default();
+    let (req_tx, req_rx) = channel::<Request>();
+    let (res_tx, res_rx) = channel::<Response>();
+    let mut app = UI::default();
+    app.req_tx = Some(req_tx);
+    app.res_rx = Some(Arc::new(res_rx));
+    thread::spawn(move || loop {
+        let c = req_rx.recv().unwrap();
+        let mut res = reqwest::blocking::get(c.parsed_url.unwrap()).unwrap();
+        let mut body = String::new();
+        dbg!(res.read_to_string(&mut body).unwrap());
+        let r = Response {
+            body: Some(body),
+            status: Some(res.status()),
+            headers: Some(res.headers().clone()),
+        };
+        dbg!(&r);
+        dbg!(res_tx.send(r).unwrap());
+    });
     eframe::run_native(Box::new(app), native_options);
+    // let res = child.join();
 }
